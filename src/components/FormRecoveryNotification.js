@@ -12,7 +12,7 @@ export default function FormRecoveryNotification({ show, onClose }) {
       const timer = setTimeout(() => {
         setIsVisible(false);
         setTimeout(onClose, 300); // Wait for animation to complete
-      }, 4000); // Show for 4 seconds
+      }, 2000); // Show for 2 seconds
 
       return () => clearTimeout(timer);
     }

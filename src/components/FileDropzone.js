@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { useAuth } from '../lib/auth/AuthProvider';
+import FileViewer from './FileViewer';
 
 /**
  * A simple drag-and-drop upload area that stores files in the `oz-projects-docs` bucket
@@ -12,6 +13,7 @@ import { useAuth } from '../lib/auth/AuthProvider';
 export default function FileDropzone({ projectId, onUploadComplete, initialFiles = [] }) {
   const [uploading, setUploading] = useState(false);
   const [uploadedFiles, setUploadedFiles] = useState(initialFiles);
+  const [viewingFile, setViewingFile] = useState(null);
   const { user } = useAuth();
 
   const handleFiles = async (fileList) => {
@@ -138,11 +140,36 @@ export default function FileDropzone({ projectId, onUploadComplete, initialFiles
       </label>
 
       {uploadedFiles.length > 0 && (
-        <ul className="mt-4 w-full text-sm list-disc list-inside text-gray-700">
-          {uploadedFiles.map((f) => (
-            <li key={f.path}>{f.name}</li>
-          ))}
-        </ul>
+        <div className="mt-4 w-full">
+          <h4 className="text-sm font-medium text-gray-700 mb-2">Uploaded Files:</h4>
+          <div className="space-y-2">
+            {uploadedFiles.map((f) => (
+              <div key={f.path} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                <div className="flex items-center space-x-3">
+                  <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  <span className="text-sm text-gray-700">{f.name}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setViewingFile(f)}
+                  className="px-3 py-1 text-xs bg-primary-600 text-white rounded hover:bg-primary-700 transition-colors"
+                >
+                  View
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* File Viewer Modal */}
+      {viewingFile && (
+        <FileViewer
+          file={viewingFile}
+          onClose={() => setViewingFile(null)}
+        />
       )}
     </div>
   );

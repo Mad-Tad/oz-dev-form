@@ -1,6 +1,8 @@
 import './globals.css';
 import React from 'react';
 import { AuthProvider } from '../lib/auth/AuthProvider';
+import { AuthModalProvider } from '../context/AuthModalContext';
+import AuthModal from '../components/AuthModal';
 
 export const metadata = {
   title: 'OZ Listings – Project Intake Form',
@@ -17,7 +19,10 @@ export default function RootLayout({ children }) {
       </head>
       <body className="bg-gray-50 text-gray-900 min-h-screen antialiased">
         <AuthProvider>
-          {children}
+          <AuthModalProvider>
+            {children}
+            <AuthModal />
+          </AuthModalProvider>
         </AuthProvider>
       </body>
     </html>

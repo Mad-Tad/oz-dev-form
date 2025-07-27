@@ -160,10 +160,11 @@ export default function ProjectIntakeForm() {
   const [uploadedFiles, setUploadedFiles] = useState([]); // store uploads for step 0 validation
   const [currentStep, setCurrentStep] = useState(0);
   const [savedStep, setSavedStep] = useState(0);
-  const totalSteps = FIELD_GROUPS.length + 1; // +1 for the upload step
+  const REVIEW_STEP_INDEX = FIELD_GROUPS.length + 1; // upload step + groups => review
+  const totalSteps = FIELD_GROUPS.length + 2; // upload + groups + review
   const [submitted, setSubmitted] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [syncStatus, setSyncStatus] = useState('saved'); // 'saved', 'saving', 'error'
   const [showRecoveryNotification, setShowRecoveryNotification] = useState(false);
   const [savingBeforeNavigation, setSavingBeforeNavigation] = useState(false);
 
@@ -177,8 +178,7 @@ export default function ProjectIntakeForm() {
           .from('oz_projects_test')
           .select('*')
           .eq('submitted_by_email', user.email)
-          .eq('submission_status', 'draft')
-          .order('created_at', { ascending: false })
+          .order('updated_at', { ascending: false })
           .limit(1);
 
         if (error) {
@@ -198,7 +198,7 @@ export default function ProjectIntakeForm() {
           // Show notification that form was recovered
           setShowRecoveryNotification(true);
         } else {
-          // Create initial draft entry if no existing draft found
+          // Create initial draft entry if no existing project found
           const projectId = crypto.randomUUID();
           const initialDraft = {
             project_id: projectId,
@@ -225,6 +225,7 @@ export default function ProjectIntakeForm() {
         console.error('Error loading form data:', error);
       } finally {
         setLoading(false);
+        setSyncStatus('saved'); // Set initial sync status
       }
     };
 
@@ -236,12 +237,18 @@ export default function ProjectIntakeForm() {
     if (!user || loading) return;
 
     const saveTimeout = setTimeout(async () => {
-      // Always save if we have a project_id, even if form is empty
+      // Only save if we have form data or an existing project_id
       if (formState.project_id || Object.values(formState).some(value => value !== '')) {
-        setSaving(true);
+        setSyncStatus('saving');
         try {
-          // Generate a project_id if it doesn't exist
-          const projectId = formState.project_id || crypto.randomUUID();
+          // Use existing project_id, don't generate new one
+          const projectId = formState.project_id;
+          
+          if (!projectId) {
+            console.log('No project_id available for auto-save, skipping...');
+            setSyncStatus('saved');
+            return;
+          }
           
           console.log('Auto-saving form data:', { projectId, hasData: Object.values(formState).some(value => value !== '') });
           
@@ -252,27 +259,23 @@ export default function ProjectIntakeForm() {
               submitted_by_name: user.user_metadata?.full_name || user.email,
               submitted_by_email: user.email,
               submitted_by_id: user.id,
-              submission_status: 'draft',
+              submission_status: formState.submission_status || 'draft', // Don't override if already submitted
               updated_at: new Date().toISOString(),
               ...formState,
-              project_id: projectId, // Ensure project_id is set
             }, {
               onConflict: 'project_id'
             });
 
           if (error) {
             console.error('Error auto-saving:', error);
+            setSyncStatus('error');
           } else {
             console.log('Auto-save successful for project_id:', projectId);
-            // Update local state with the project_id if it was generated
-            if (!formState.project_id) {
-              setFormState(prev => ({ ...prev, project_id: projectId }));
-            }
+            setSyncStatus('saved');
           }
         } catch (error) {
           console.error('Error auto-saving:', error);
-        } finally {
-          setSaving(false);
+          setSyncStatus('error');
         }
       }
     }, 2000); // Save after 2 seconds of inactivity
@@ -283,11 +286,15 @@ export default function ProjectIntakeForm() {
   const handleChange = (e) => {
     const { name, value } = e.target;
     setFormState((prev) => ({ ...prev, [name]: value }));
+    // Set sync status to saving when user makes changes
+    if (syncStatus === 'saved') {
+      setSyncStatus('saving');
+    }
   };
 
   const validateStep = () => {
     // Step 0 is the upload step
-    if (currentStep === 0) {
+    if (currentStep === 0 || currentStep === REVIEW_STEP_INDEX) {
       return true;
     }
     const group = FIELD_GROUPS[currentStep - 1]; // shift by 1
@@ -322,8 +329,8 @@ export default function ProjectIntakeForm() {
       return;
     }
 
-    // Prepare payload
-    const uuid = crypto.randomUUID();
+    // Use existing project_id if available, otherwise create new one
+    const projectId = formState.project_id || crypto.randomUUID();
     const numericFields = [
       'zip_code',
       'total_units',
@@ -341,16 +348,17 @@ export default function ProjectIntakeForm() {
     ];
 
     const payload = {
-      project_id: uuid,
+      project_id: projectId,
       submitted_by_name: user.user_metadata?.full_name || user.email,
       submitted_by_email: user.email,
       submitted_by_id: user.id,
       project_slug: slugify(formState.project_name),
-      created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
       submission_status: 'submitted',
       ...formState,
     };
+
+    console.log('Submitting project with payload:', payload);
 
     // Convert numeric strings to numbers
     numericFields.forEach((key) => {
@@ -360,18 +368,26 @@ export default function ProjectIntakeForm() {
       }
     });
 
-    // Insert into Supabase
-    const { error } = await supabase.from('oz_projects_test').insert(payload);
+    // Update existing record or insert new one
+    const { error, data } = await supabase
+      .from('oz_projects_test')
+      .upsert(payload, {
+        onConflict: 'project_id'
+      });
 
     if (error) {
-      console.error('Supabase insert error:', error);
+      console.error('Supabase upsert error:', error);
       alert('Error saving project: ' + error.message);
       return;
     }
 
+    console.log('Project submitted successfully:', { projectId, data });
+
+    // Update local form state to reflect submission
+    setFormState(prev => ({ ...prev, submission_status: 'submitted' }));
+
     setSubmitted(true);
-    clearStoredStep(formState.project_id); // Clear step tracking on submission
-    // nothing to clear
+    clearStoredStep(projectId); // Clear step tracking on submission
   };
 
   if (loading) {
@@ -387,8 +403,25 @@ export default function ProjectIntakeForm() {
   if (submitted) {
     return (
       <div className="max-w-xl mx-auto py-20 text-center animate-fade-in">
-        <h2 className="text-2xl font-bold mb-4 text-primary-600">Thank you!</h2>
-        <p>Your project details have been received. Our team will review and follow up shortly.</p>
+        <div className="mb-8">
+          <svg className="w-16 h-16 text-green-500 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <h2 className="text-2xl font-bold mb-4 text-primary-600">Thank you!</h2>
+          <p className="text-gray-600 mb-8">Your project details have been received. Our team will review and follow up shortly.</p>
+        </div>
+        
+        <div className="flex flex-col sm:flex-row gap-4 justify-center">
+          <button
+            onClick={() => window.location.href = '/'}
+            className="px-6 py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors flex items-center justify-center"
+          >
+            <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+            </svg>
+            Back to Home
+          </button>
+        </div>
       </div>
     );
   }
@@ -408,21 +441,19 @@ export default function ProjectIntakeForm() {
         <button
           onClick={async () => {
             // Save current form data before navigating
-            if (user && Object.values(formState).some(value => value !== '')) {
+            if (user && formState.project_id && Object.values(formState).some(value => value !== '')) {
               setSavingBeforeNavigation(true);
               try {
-                const projectId = formState.project_id || crypto.randomUUID();
                 const { error } = await supabase
                   .from('oz_projects_test')
                   .upsert({
-                    project_id: projectId,
+                    project_id: formState.project_id,
                     submitted_by_name: user.user_metadata?.full_name || user.email,
                     submitted_by_email: user.email,
                     submitted_by_id: user.id,
                     submission_status: 'draft',
                     updated_at: new Date().toISOString(),
                     ...formState,
-                    project_id: projectId,
                   }, {
                     onConflict: 'project_id'
                   });
@@ -432,7 +463,7 @@ export default function ProjectIntakeForm() {
                 setSavingBeforeNavigation(false);
               }
             }
-            window.location.href = '/dashboard';
+            window.location.href = '/';
           }}
           disabled={savingBeforeNavigation}
           className="text-gray-600 hover:text-gray-800 flex items-center disabled:opacity-50"
@@ -452,12 +483,23 @@ export default function ProjectIntakeForm() {
           )}
         </button>
         <div className="flex items-center space-x-4">
-          {(saving || savingBeforeNavigation) && (
-            <div className="flex items-center text-sm text-gray-500">
-              <div className="w-4 h-4 border-2 border-gray-300 border-t-gray-600 rounded-full animate-spin mr-2"></div>
-              {savingBeforeNavigation ? 'Saving before navigation...' : 'Saving...'}
-            </div>
-          )}
+          {/* Sync Status Indicator */}
+          <div className="flex items-center text-xs">
+            <div className={`w-2 h-2 rounded-full mr-2 ${
+              syncStatus === 'saved' ? 'bg-green-500' :
+              syncStatus === 'saving' ? 'bg-yellow-500 animate-pulse' :
+              'bg-red-500'
+            }`}></div>
+            <span className={`${
+              syncStatus === 'saved' ? 'text-gray-400' :
+              syncStatus === 'saving' ? 'text-yellow-600' :
+              'text-red-600'
+            }`}>
+              {syncStatus === 'saved' ? 'All changes saved' :
+               syncStatus === 'saving' ? 'Saving...' :
+               'Save failed'}
+            </span>
+          </div>
         </div>
       </div>
 
@@ -468,19 +510,14 @@ export default function ProjectIntakeForm() {
 
       {/* Progress Bar */}
       <div className="mb-8">
-        <div className="flex justify-between text-sm font-medium text-gray-600 mb-1">
-          {Array.from({ length: totalSteps }).map((_, idx) => (
-            <div
-              key={idx}
-              className={`flex-1 text-center ${idx === currentStep ? 'text-primary-600' : ''}`}
-            >
-              {idx + 1}
-            </div>
-          ))}
+        <div className="flex items-center mb-3">
+          <span className="text-sm font-medium text-gray-600">
+            Step {currentStep + 1} of {totalSteps}
+          </span>
         </div>
-        <div className="w-full bg-gray-200 h-2 rounded-full">
+        <div className="w-full bg-gray-200 h-3 rounded-full overflow-hidden">
           <div
-            className="h-2 bg-primary-600 rounded-full transition-all"
+            className="h-3 bg-gradient-to-r from-primary-500 to-primary-600 rounded-full transition-all duration-500 ease-out shadow-sm"
             style={{ width: `${progressPercent}%` }}
           />
         </div>
@@ -513,6 +550,25 @@ export default function ProjectIntakeForm() {
                   Document upload is optional. You can proceed without uploading files.
                 </p>
               )}
+            </fieldset>
+          );
+        }
+
+        if (currentStep === REVIEW_STEP_INDEX) {
+          return (
+            <fieldset className="mb-6">
+              <legend className="text-xl font-semibold mb-4 text-primary-700 border-b border-primary-200 pb-2">
+                Review &amp; Confirm
+              </legend>
+              <div className="space-y-4 text-left">
+                {Object.entries(formState).filter(([key]) => key !== 'project_id').map(([key, value]) => (
+                  <div key={key} className="flex justify-between border-b pb-1">
+                    <span className="font-medium capitalize text-gray-700 mr-4">{key.replace(/_/g, ' ')}</span>
+                    <span className="text-gray-600 max-w-xs truncate text-right">{String(value)}</span>
+                  </div>
+                ))}
+              </div>
+              <p className="text-sm text-gray-500 mt-4">Please review the information above. Click "Submit" to finalize.</p>
             </fieldset>
           );
         }
@@ -552,7 +608,7 @@ export default function ProjectIntakeForm() {
             Back
           </button>
         )}
-        {currentStep < totalSteps - 1 ? (
+        {currentStep < totalSteps - 1 && (
           <button
             type="button"
             onClick={handleNext}
@@ -560,7 +616,8 @@ export default function ProjectIntakeForm() {
           >
             Next
           </button>
-        ) : (
+        )}
+        {currentStep === totalSteps - 1 && (
           <button
             type="submit"
             className="ml-auto px-6 py-2 rounded-md bg-primary-600 hover:bg-primary-700 text-white font-semibold"
