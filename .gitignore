@@ -66,4 +66,6 @@ venv/
 
 # Extra
 oz-homepage-copy/
+oz-dev-dash-copy/
 .next/
+oz_projects_backup.csv
